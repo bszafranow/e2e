@@ -251,7 +251,7 @@ reporters: ['list', 'junit'], // default: ['list']
 | `'dot'`, `dot()` | Compact terminal progress, failures, and a run summary. Excludes `list`: the two together are `INVALID_CONFIG`. |
 | `'junit'`, `junit()` | Writes `<output>/junit.xml`, or `outputFile`. |
 | `'markdown'`, `markdown()` | Writes `<output>/summary.md`, or `outputFile`. |
-| `'json'`, `json()` | Prints the report on stdout. Beside it, the `list` and `dot` ids print to stderr. |
+| `'json'`, `json()` | Prints the report on stdout. Beside it, `list` or `dot` prints to stderr unless given a `stream`. |
 | another `Reporter` object | Runs beside the built-in ones. `--reporter` never removes it. |
 
 An id is its factory called with no options. An unknown id is

@@ -125,6 +125,7 @@ reporters: ['list', 'junit'],
   `<system-out>[[ATTACHMENT|<path>]]</system-out>`, which GitLab CI shows in
   the pipeline test report. The path is relative to `$CI_PROJECT_DIR`, or to
   the project root when that is unset; screenshots outside it get no link.
+
 #### `markdown`
 
 Writes `summary.md` beside the report.
@@ -302,8 +303,9 @@ runs and for pinned agents whose model is not in the run header.
 
 #### `name`
 
-The reporter's label in diagnostics. Required and non-empty. `list`,
-`dot`, `json`, `junit`, and `markdown` belong to the built-in reporters.
+The reporter's label in diagnostics. Required and non-empty. It may match a
+built-in's name: a reporter named `json` is still yours, and `--reporter`
+never replaces it.
 
 ```ts
 name: 'upload',
@@ -328,8 +330,8 @@ printsTo: 'stdout',
 - `--step` needs the reporter printing to stdout to have
   [`onStepPrompt`](#onstepprompt), as `list` does.
 - A second Ctrl-C never stops its `onRunFinished`: its output is local.
-- A run embedded through [`e2e/runner`](/reference/runner) runs none that
-  also has `onOutput`, as `list` and `dot`.
+- A run embedded through [`e2e/runner`](/reference/runner) skips a
+  reporter that sets `printsTo` and has `onOutput`, such as `list` and `dot`.
 
 #### `onEvent`
 
