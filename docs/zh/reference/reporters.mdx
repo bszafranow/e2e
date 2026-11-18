@@ -202,8 +202,13 @@ export default {
 ```ts
 interface Reporter {
   readonly name: string;
+  readonly printsTo?: 'stdout' | 'stderr';
   onEvent?(event: RunEvent): void;
+  onOutput?(output: ReporterOutput): void;
+  onStepPrompt?(prompt: StepPrompt | undefined): void;
+  reportFiles?(run: FinishedRun, signal: AbortSignal): readonly ReportFile[] | Promise<readonly ReportFile[]>;
   onRunFinished?(run: FinishedRun, signal: AbortSignal): Promise<ReporterSummary | void>;
+  onSummary?(rows: ReporterSummary): void;
 }
 ```
 
@@ -216,6 +221,20 @@ interface Reporter {
 ```ts
 name: 'upload',
 ```
+
+#### `printsTo`
+
+报告器输出到的终端流，像 [`list`](#list) 和 [`json`](#json) 输出到 stdout。两个报告器输出到同一个流会互相打乱，所以每个流只能有一个设置它。
+
+```ts
+printsTo: 'stdout',
+```
+
+- 它的钩子直接写入 `process.stdout`。这些输出不会被脱敏，所以只输出事件和报告中已经脱敏的内容。
+- 像 `json` 一样没有 [`onOutput`](#onoutput) 时，运行器自己打印的内容改到 stderr，stdout 只留下报告器的输出。
+- `--step` 需要输出到 stdout 的报告器有 [`onStepPrompt`](#onstepprompt)，像 `list` 一样。
+- 第二次 Ctrl-C 不会停止它的 `onRunFinished`：它的输出在本地。
+- 通过 [`e2e/runner`](/reference/runner) 嵌入的运行不会运行这种报告器。
 
 #### `onEvent`
 
@@ -238,6 +257,61 @@ onEvent(event) {
 `onEvent` 不得阻塞，也不得抛出异常。耗时操作应放在 `onRunFinished` 中。抛出异常会使报告器在本次运行的剩余时间内被停用，并在 stderr 输出一行，包含报告器名称、事件类型和错误。运行结果不变。
 </Note>
 
+#### `onOutput`
+
+按打印的原样接收代码打印的内容，已脱敏：测试的输出，以及运行器进程打印的内容（配置的顶层、加载中的测试文件、其他报告器）。
+
+```ts
+onOutput({ stream, text, target, pair }) {
+  socket.send(JSON.stringify({ source: target === undefined ? 'runner' : pair?.testId, stream, text }));
+},
+```
+
+```ts
+interface ReporterOutput {
+  readonly stream: 'stdout' | 'stderr';
+  readonly text: string;   // one write, which may end mid-line
+  readonly target?: string; // the target of a test's output; absent for the runner's
+  readonly pair?: { testId: string; agent: string; repeat: number }; // the test running then
+}
+```
+
+- 除非[输出到 stdout](#printsto) 的报告器像 `list` 一样有 `onOutput`，运行器也会把输出和运行错误原样打印到终端。只记录输出的报告器不会让终端静默。
+- 测试的输出也是一个 `output` [事件](#events)。
+- 报告器在 `onOutput` 中打印的内容会原样打印到终端，不会再交给 `onOutput`。
+
+#### `onStepPrompt`
+
+接收要显示的 [`--step`](/debugging#step-through-a-test) 提示，或用于撤下提示的 `undefined`。
+
+```ts
+onStepPrompt(prompt) {
+  overlay.show(prompt === undefined ? '' : `Step ${prompt.steps[0].number}: ${prompt.steps[0].step.label}`);
+},
+```
+
+除非[输出到 stdout](#printsto) 的报告器有它，提示也会在 stderr 上打印为一行。
+
+#### `reportFiles`
+
+返回为已完成的运行写入的文件。运行器以原子方式写入每个文件。
+
+```ts
+reportFiles: (run) => [{ path: 'reports/status.txt', content: run.report.run.status, label: 'Status' }],
+```
+
+```ts
+interface ReportFile {
+  readonly path: string;    // absolute, or from the project root
+  readonly content: string;
+  readonly label?: string;  // the summary row's label; its text is the path
+  readonly note?: string;   // printed after the path, such as `(one file, 2.1 MB)`
+}
+```
+
+- 它与 `onRunFinished` 有相同的一分钟期限和 `signal`，但第二次 Ctrl-C 不会停止它。上一次运行的文件不会留在新报告旁边。
+- 写到 `report.json` 路径的文件、无法写入的文件，或不是文件列表的返回值，会在 stderr 上输出一行。
+
 #### `onRunFinished`
 
 在报告写入且终端摘要输出后运行，接收已完成的运行和一个 `AbortSignal`。
@@ -256,6 +330,7 @@ interface FinishedRun {
   readonly exitCode: RunExitCode;
   readonly projectRoot: string;            // what the terminal shows paths relative to
   readonly reportPath: string | undefined; // absent when the run stopped before its tests or the write failed
+  readonly outputDir: string;              // the output directory, .e2e by default
   readonly artifactsRoot: string;          // what the report's artifact paths are relative to
   readonly aiTracePath: string | undefined;
   readonly traces: ReadonlyMap<string, string>;      // result id -> its trace page, from the project root
@@ -311,13 +386,25 @@ type ReporterSummary = readonly { label: string; text: string }[];
 - 筛选器作出决定后，`run.changes` 以计数形式保存所判断的变更：`base`（合并基点）、`files` 和 `skipped`（没有筛选器运行的原因，例如 `no files changed since abc1234`）。配置了筛选器且运行传入了 `--changed-since` 时会包含此字段，但 `e2e explore`、`--watch` 重跑，以及在筛选器决定前结束的运行除外。使用 `--last-failed` 或没有待判断测试时，它仅包含 `skipped`。
 - 筛选器决定期间发生的失败，例如引用未指向任何提交时的 `INVALID_CHANGED_SINCE`，记录在 `run.errors` 中，`phase` 为 `filter`。格式错误的 `changedSince` 的 `phase` 为 `config`。
 
+#### `onSummary`
+
+按 `reporters` 顺序接收所有报告器的摘要行：先是带标签的报告文件的行，再是 `onRunFinished` 返回的行。
+
+```ts
+onSummary(rows) {
+  for (const row of rows) console.log(`${row.label}: ${row.text}`);
+},
+```
+
+它在所有 `onRunFinished` 完成或被放弃后最后运行，第二次 Ctrl-C 之后也会运行。
+
 ## 事件
 
 `onEvent` 接收以下事件之一。每个事件还包含序号 `seq` 和 ISO 时间戳 `at`。
 
 ```ts
 type RunEventFact =
-  | { type: 'run-started'; runId; projectId; projectRoot; artifactsRoot; ci; targets; agents?; model?; judge? }
+  | { type: 'run-started'; runId; projectId; projectRoot; artifactsRoot; ci; targets; agents?; model?; judge?; stepping? }
   | { type: 'plan'; total; files: { file; target; tests }[] }
   | { type: 'notice'; target; message }
   | { type: 'output'; target; pair; stream: 'stdout' | 'stderr'; text }

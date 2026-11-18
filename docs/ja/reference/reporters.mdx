@@ -202,8 +202,13 @@ export default {
 ```ts
 interface Reporter {
   readonly name: string;
+  readonly printsTo?: 'stdout' | 'stderr';
   onEvent?(event: RunEvent): void;
+  onOutput?(output: ReporterOutput): void;
+  onStepPrompt?(prompt: StepPrompt | undefined): void;
+  reportFiles?(run: FinishedRun, signal: AbortSignal): readonly ReportFile[] | Promise<readonly ReportFile[]>;
   onRunFinished?(run: FinishedRun, signal: AbortSignal): Promise<ReporterSummary | void>;
+  onSummary?(rows: ReporterSummary): void;
 }
 ```
 
@@ -216,6 +221,20 @@ interface Reporter {
 ```ts
 name: 'upload',
 ```
+
+#### `printsTo`
+
+レポーターが出力するターミナルのストリームです。[`list`](#list) や [`json`](#json) は stdout に出力します。2 つが同じストリームに出力すると互いに崩れるため、設定できるのはストリームごとに 1 つだけです。
+
+```ts
+printsTo: 'stdout',
+```
+
+- フックは `process.stdout` に直接書き込みます。この出力はリダクションされないため、リダクション済みのイベントとレポートの内容だけを出力してください。
+- `json` のように [`onOutput`](#onoutput) がない場合、ランナー自身の出力は stderr に移り、stdout にはレポーターの出力だけが残ります。
+- `--step` には、stdout に出力するレポーターが `list` のように [`onStepPrompt`](#onstepprompt) を持つ必要があります。
+- 2 回目の Ctrl-C でも、その `onRunFinished` は止まりません。出力がローカルだからです。
+- [`e2e/runner`](/reference/runner) で埋め込んだ実行では、このレポーターは実行しません。
 
 #### `onEvent`
 
@@ -238,6 +257,61 @@ onEvent(event) {
 `onEvent` でブロックや例外の送出をしないでください。時間のかかる処理は `onRunFinished` で行います。例外を投げると、そのレポーターはその実行が終わるまで無効になり、レポーター名、イベントの種類、エラーを stderr に 1 行表示します。実行結果は変わりません。
 </Note>
 
+#### `onOutput`
+
+コードが出力した内容を、出力されたとおりにリダクションして受け取ります。テストの出力と、ランナープロセスの出力（設定のトップレベル、読み込み中のテストファイル、他のレポーター）です。
+
+```ts
+onOutput({ stream, text, target, pair }) {
+  socket.send(JSON.stringify({ source: target === undefined ? 'runner' : pair?.testId, stream, text }));
+},
+```
+
+```ts
+interface ReporterOutput {
+  readonly stream: 'stdout' | 'stderr';
+  readonly text: string;   // one write, which may end mid-line
+  readonly target?: string; // the target of a test's output; absent for the runner's
+  readonly pair?: { testId: string; agent: string; repeat: number }; // the test running then
+}
+```
+
+- `list` のように、[stdout に出力する](#printsto)レポーターが `onOutput` を持たない限り、ランナーも出力と実行エラーをそのままターミナルに出力します。出力を記録するだけのレポーターがターミナルを黙らせることはありません。
+- テストの出力は `output` [イベント](#events)にもなります。
+- レポーターが `onOutput` の中で出力した内容は、そのままターミナルに出力され、`onOutput` には戻りません。
+
+#### `onStepPrompt`
+
+表示する [`--step`](/debugging#step-through-a-test) のプロンプト、または消すための `undefined` を受け取ります。
+
+```ts
+onStepPrompt(prompt) {
+  overlay.show(prompt === undefined ? '' : `Step ${prompt.steps[0].number}: ${prompt.steps[0].step.label}`);
+},
+```
+
+[stdout に出力する](#printsto)レポーターがこれを持たない限り、プロンプトは stderr にも 1 行で出力されます。
+
+#### `reportFiles`
+
+完了した実行について書き込むファイルを返します。ランナーが各ファイルをアトミックに書き込みます。
+
+```ts
+reportFiles: (run) => [{ path: 'reports/status.txt', content: run.report.run.status, label: 'Status' }],
+```
+
+```ts
+interface ReportFile {
+  readonly path: string;    // absolute, or from the project root
+  readonly content: string;
+  readonly label?: string;  // the summary row's label; its text is the path
+  readonly note?: string;   // printed after the path, such as `(one file, 2.1 MB)`
+}
+```
+
+- `onRunFinished` と同じ 1 分の期限と `signal` がありますが、2 回目の Ctrl-C でも止まりません。前回の実行のファイルが新しいレポートの横に残ることはありません。
+- `report.json` のパスへのファイル、書き込めないファイル、ファイルの一覧でない戻り値は、stderr に 1 行出力されます。
+
 #### `onRunFinished`
 
 レポートを書き込み、ターミナルのサマリーを表示した後に、完了した実行と `AbortSignal` を渡して呼び出します。
@@ -256,6 +330,7 @@ interface FinishedRun {
   readonly exitCode: RunExitCode;
   readonly projectRoot: string;            // what the terminal shows paths relative to
   readonly reportPath: string | undefined; // absent when the run stopped before its tests or the write failed
+  readonly outputDir: string;              // the output directory, .e2e by default
   readonly artifactsRoot: string;          // what the report's artifact paths are relative to
   readonly aiTracePath: string | undefined;
   readonly traces: ReadonlyMap<string, string>;      // result id -> its trace page, from the project root
@@ -311,13 +386,25 @@ type ReporterSummary = readonly { label: string; text: string }[];
 - フィルターの判断後、`run.changes` は判断した変更を集計値で保持します。`base`（マージベース）、`files`、`skipped`（`no files changed since abc1234` など、どのフィルターも実行しなかった理由）です。フィルターを設定して `--changed-since` を渡した実行に存在します。ただし `e2e explore`、`--watch` の再実行、判断前に終了した実行は除きます。`--last-failed`、または判断するテストがない場合は、`skipped` だけを保持します。
 - 存在しないコミットを指定した参照による `INVALID_CHANGED_SINCE` など、フィルターの判断中の失敗は、`phase` が `filter` のエラーとして `run.errors` に入ります。不正な形式の `changedSince` では `phase` は `config` です。
 
+#### `onSummary`
+
+すべてのレポーターのサマリー行を `reporters` の順に受け取ります。ラベル付きのレポートファイルの行、次に `onRunFinished` が返した行です。
+
+```ts
+onSummary(rows) {
+  for (const row of rows) console.log(`${row.label}: ${row.text}`);
+},
+```
+
+すべての `onRunFinished` が終わるか打ち切られた後、最後に実行されます。2 回目の Ctrl-C の後も実行されます。
+
 ## イベント
 
 `onEvent` は、次のいずれかのイベントを受け取ります。各イベントには連番 `seq` と ISO 形式のタイムスタンプ `at` もあります。
 
 ```ts
 type RunEventFact =
-  | { type: 'run-started'; runId; projectId; projectRoot; artifactsRoot; ci; targets; agents?; model?; judge? }
+  | { type: 'run-started'; runId; projectId; projectRoot; artifactsRoot; ci; targets; agents?; model?; judge?; stepping? }
   | { type: 'plan'; total; files: { file; target; tests }[] }
   | { type: 'notice'; target; message }
   | { type: 'output'; target; pair; stream: 'stdout' | 'stderr'; text }
