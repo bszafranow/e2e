@@ -200,7 +200,7 @@ target's `app`:
 | `environment` | `'test'`, `'staging'`, `'production'`; inferred from the host, labels the report and cache key. |
 | `identity` | Stable identity for cache and session keys when the origin changes per deploy (preview URLs). Defaults to the URL's origin and path, else `bundleId`, else `appPath`. |
 
-Next.js ([guide](https://e2e.com/docs/nextjs)): set `app.command` to `next
+Next.js ([guide](https://e2e.com/docs/frameworks/nextjs)): set `app.command` to `next
 dev` locally and `next start` when `CI` is set (e2e reads `''`, `0`, and
 `false` as unset; read it the same way in the config), with `next build`
 before `e2e run` in CI; `reuseExisting: true` reuses a dev server already on

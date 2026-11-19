@@ -11,7 +11,7 @@ cookies, dialogs, and downloads, see [Working with the browser](/browser).
 ## Starting your app
 
 Set your app's URL in the target's `app`. `app.open('/path')` resolves
-against it. For a Next.js app, follow [Next.js](/nextjs).
+against it:
 
 ```ts title="Target fragment"
 engine: web(),
@@ -91,7 +91,7 @@ app: {
 - Cache entries stay valid when the port changes.
 - `reuseExisting` doesn't work with port `0`.
 - A Next.js dev server needs an `allowedDevOrigins` entry for the host. See
-  [Next.js](/nextjs#fix-next-js-problems).
+  [Next.js](/frameworks/nextjs#fix-next-js-problems).
 
 See [free ports](/reference/config#free-ports).
 

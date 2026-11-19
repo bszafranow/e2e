@@ -10,7 +10,7 @@ description: Web エンジンにアプリを指定するか、ランナーに起
 
 ## アプリを起動する
 
-ターゲットの `app` にアプリの URL を設定します。`app.open('/path')` は、その URL を基準に解決されます。Next.js アプリでは [Next.js](/nextjs) の手順に従ってください。
+ターゲットの `app` にアプリの URL を設定します。`app.open('/path')` は、その URL を基準に解決されます。
 
 ```ts title="Target fragment"
 engine: web(),
@@ -89,7 +89,7 @@ app: {
 - ポートが変わってもキャッシュのエントリーは有効です。
 - ポート `0` では `reuseExisting` は使えません。
 - Next.js の開発サーバーには、そのホストの `allowedDevOrigins` エントリーが必要です。
-  [Next.js](/nextjs#fix-next-js-problems) を参照してください。
+  [Next.js](/frameworks/nextjs#fix-next-js-problems) を参照してください。
 
 [空きポート](/reference/config#free-ports) を参照してください。
 

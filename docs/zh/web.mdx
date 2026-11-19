@@ -9,7 +9,7 @@ description: 将网页端引擎指向你的应用或让运行器启动应用，�
 
 ## 启动应用
 
-在测试目标的 `app` 中设置应用 URL。`app.open('/path')` 会基于它解析路径。Next.js 应用请按照 [Next.js](/nextjs) 操作：
+在测试目标的 `app` 中设置应用 URL。`app.open('/path')` 会基于它解析路径：
 
 ```ts title="Target fragment"
 engine: web(),
@@ -79,7 +79,7 @@ app: {
 - 测试从 `app.baseUrl` 读取带实际端口的 URL。
 - 端口变化时，缓存条目仍然有效。
 - `reuseExisting` 不能与端口 `0` 一起使用。
-- Next.js 开发服务器需要为该主机添加 `allowedDevOrigins` 条目。参阅 [Next.js](/nextjs#fix-next-js-problems)。
+- Next.js 开发服务器需要为该主机添加 `allowedDevOrigins` 条目。参阅 [Next.js](/frameworks/nextjs#fix-next-js-problems)。
 
 参阅[空闲端口](/reference/config#free-ports)。
 

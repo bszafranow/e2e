@@ -3,9 +3,9 @@ title: Next.js
 description: 为 Next.js 应用添加 e2e，在本地针对 `next dev`、在 CI 中针对生产构建进行测试。
 ---
 
-import { SetupPrompt } from '../snippets/setup-prompt-card.jsx';
+import { SetupPrompt } from '../../snippets/setup-prompt-card.jsx';
 
-export const setupPrompt = `在这个 Next.js 应用中配置 e2e 端到端测试。文档：\`https://e2e.com/docs/nextjs.md\`
+export const setupPrompt = `在这个 Next.js 应用中配置 e2e 端到端测试。文档：\`https://e2e.com/docs/frameworks/nextjs.md\`
 
 1. 运行 \`npx e2e init --yes\`（如果项目使用 pnpm 或 bun，请使用对应的命令）。
 2. 将 e2e.config.ts 中的测试目标替换为页面上的配置：本地启动 \`next dev\`，设置了 CI 时启动 \`next start\`。使用这个应用的端口和包管理器。

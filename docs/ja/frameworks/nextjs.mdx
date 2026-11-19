@@ -3,9 +3,9 @@ title: Next.js
 description: Next.js アプリに e2e を追加し、ローカルでは `next dev`、CI では本番ビルドでテストします。
 ---
 
-import { SetupPrompt } from '../snippets/setup-prompt-card.jsx';
+import { SetupPrompt } from '../../snippets/setup-prompt-card.jsx';
 
-export const setupPrompt = `この Next.js アプリに e2e のエンドツーエンドテストを導入してください。ドキュメント: \`https://e2e.com/docs/nextjs.md\`
+export const setupPrompt = `この Next.js アプリに e2e のエンドツーエンドテストを導入してください。ドキュメント: \`https://e2e.com/docs/frameworks/nextjs.md\`
 
 1. \`npx e2e init --yes\` を実行してください。プロジェクトで pnpm や bun を使っている場合は、それに対応するコマンドを使ってください。
 2. e2e.config.ts のターゲットを、ページにあるものに置き換えてください。ローカルでは \`next dev\`、CI が設定されているときは \`next start\` を起動します。このアプリのポートとパッケージマネージャーに合わせてください。
