@@ -73,6 +73,7 @@
             "group": "Platforms",
             "pages": [
               "web",
+              "nextjs",
               "mobile",
               "api-testing",
               "core"
