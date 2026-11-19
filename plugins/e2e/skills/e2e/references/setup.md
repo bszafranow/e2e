@@ -58,8 +58,9 @@ The wizard needs a terminal: without one, `init` exits with code 2. From an
 agent's shell, run `npx e2e init --yes` when its defaults fit and install the
 dependencies after it, or install by hand (below). `--yes` includes MCP
 registration. When the client already has the e2e plugin, pass
-`--skills none --mcp none`, since the plugin gives it the skill and the server
-(`plugin:e2e:e2e`). A manual install needs a separate entry (topic `mcp`).
+`--skills none`, since the plugin gives it the skill; in Codex and Cursor,
+pass `--mcp none` too, since the plugin also gives it the server. A manual
+install needs a separate entry (topic `mcp`).
 
 Init adds dependencies and a `test:e2e` script to `package.json`, writes
 `e2e.config.ts` and `tests/example.e2e.ts`, updates `.gitignore`, leaves

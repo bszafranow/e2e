@@ -355,19 +355,21 @@ suites that consume the built packages the way a user would.
   skips them as installed project skills. Each also carries
   `metadata.internal: true`, which keeps skills.sh from listing it on the
   e2e-inc/e2e page; `npx skills update` drops that line, so add it back.
-- `plugins/e2e/` — one package of skills and the e2e MCP server
-  (`.mcp.json`, `npx -y e2e@<version> mcp`) for Codex, Claude Code, Cursor, and Devin; Grok
-  Build reads the Claude files. The root
+- `plugins/e2e/` — one package of skills for Codex, Claude Code, Cursor, and
+  Devin, and the e2e MCP server (`mcp.json`, `npx -y e2e@<version> mcp`) for
+  all of them but Claude Code; Grok Build reads the Claude files. There is no
+  `.mcp.json`: Claude Code loads one from a plugin's root without being told,
+  and `pnpm plugins:check` fails when it appears. The root
   `.agents/plugins/marketplace.json`, `.claude-plugin/marketplace.json`, and
   `.cursor-plugin/marketplace.json` all point here. Edit skill Markdown in
   `skills/`, then run `pnpm plugins:sync`; `pnpm plugins:check` checks the
   generated copies, license, the Claude, Cursor, and Devin manifests (generated from
-  Codex's), every manifest's `version`, and the version `.mcp.json` pins, which is the
+  Codex's), every manifest's `version`, and the version `mcp.json` pins, which is the
   runner's (`version-packages` syncs it, so plugin
   installs update once per release; it does the same for
   `packages/e2e/server.json`, the MCP Registry entry). The Codex manifest's other fields
-  (its `mcpServers` path reaches the Claude and Cursor manifests too; Cursor
-  discovers only `mcp.json` without it), assets, README, and
+  (its `mcpServers` path, `./mcp.json`, reaches the Cursor manifest too, and
+  the sync drops it from Claude's), assets, README, and
   per-skill `agents/openai.yaml` are maintained in the plugin. Keep the
   package self-contained and leave the repository's development MCP
   configuration outside it. Example skills use `SKILL.example.md` so clients
