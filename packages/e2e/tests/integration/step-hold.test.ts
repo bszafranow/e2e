@@ -6,15 +6,28 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { defineTool } from '@e2e-dev/core/lib/agent/public';
+import type { EngineAttemptContext } from '@e2e-dev/core/lib/engine/index';
+import { SecretLedger } from '@e2e-dev/core/lib/internal/redact';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { StepGate } from '../../src/cli/step.ts';
+import { stepPromptText } from '../../src/report/list-steps.ts';
+import type { HeldTestAttachment } from '../../src/run/step-attachment-wire.ts';
 import type { BeforeStep, HeldStep, StepHoldContext } from '../../src/run/step-hold.ts';
 import { createFakeEngine, FAKE_APP } from '../helpers/fake-engine.ts';
+import { gate } from '../helpers/gate.ts';
 import {
+  contentsUnder,
+  createProject,
   resultByTitle,
+  runExisting,
+  runExistingWithConfigFile,
   runProject,
   runProjectWithConfigFile,
   workerFakeConfigSource,
   type FixtureProject,
+  type RunOptions,
   type RunOutcome,
 } from '../helpers/run-project.ts';
 
@@ -210,6 +223,62 @@ describe('reading the held screen', () => {
     expect(resultByTitle(outcome, 'reads one screen').status).toBe('passed');
     expect(observed).toBe(1);
     expect(screens).toEqual([expect.stringContaining('button "Submit"')]);
+  }, 60_000);
+
+  it('shows each paused test with its own screen when three workers pause', async () => {
+    const stepGate = new StepGate(() => {}, { holdSteps: false });
+    const names = ['alpha', 'beta', 'gamma'];
+    const prompts: Promise<string>[] = [];
+    let held = 0;
+    const { outcome, project } = await runProjectWithConfigFile(
+      Object.fromEntries(names.map((name) => [`tests/${name}.e2e.ts`, `import { test } from 'e2e';
+test('${name} is paused', async ({ app, screen }) => {
+  await app.open('/${name}');
+  await screen.pause();
+});
+`])),
+      {
+        configSource: `import { createFakeEngine, FAKE_APP } from '../../helpers/fake-engine.ts';
+const { engine } = createFakeEngine({ scene: () => [] });
+export default { targets: [{ name: 'fake', platform: 'fake', engine, app: FAKE_APP }], workers: 3 };
+`,
+        runOptions: {
+          hold: {
+            steps: false,
+            ask: async (step, context) => {
+              const paused = stepGate.beforeStep(step, {
+                ...context,
+                show: (prompt) => {
+                  if (prompt !== undefined) {
+                    prompts.push(context.readScreen().then((screen) => stepPromptText(prompt, screen)));
+                  }
+                },
+              });
+
+              if (++held === names.length) {
+                for (let index = 0; index < names.length; index += 1) {
+                  await prompts[index];
+                  stepGate.press('continue', { guard: false });
+                }
+              }
+              await paused;
+            },
+          },
+        },
+      },
+    );
+    try {
+      expect(outcome.exitCode).toBe(0);
+      const shown = await Promise.all(prompts);
+      expect(shown).toHaveLength(3);
+      for (const name of names) {
+        const prompt = shown.find((text) => text.includes(` in ${name} is paused [fake]:`));
+        expect(prompt).toMatch(/^Paused \(p\d+\) in /);
+        expect(prompt).toContain(`Screen:\n  ${FAKE_APP.url}/${name}\n`);
+      }
+    } finally {
+      project.cleanup();
+    }
   }, 60_000);
 });
 
@@ -488,6 +557,152 @@ test('pauses on a frame', async ({ gadget }) => {
     expect(attempt?.error).toMatchObject({ code: 'PAUSE_UNAVAILABLE', source: { file: 'tests/ci.e2e.ts', line: 3 } });
     expect(held).toEqual([]);
   }, 60_000);
+});
+
+it('runs the next test step on resume while an attached action is still in flight', async () => {
+  const started = gate();
+  const finish = gate();
+  let nextRan = false;
+  let log: EngineAttemptContext['appLog'] | undefined;
+  const { engine } = createFakeEngine({
+    onStartAttempt: (context) => {
+      log = context.appLog;
+    },
+    onNavigate: async (url) => {
+      if (new URL(url).pathname === '/attached') {
+        started.open();
+        await finish.promise;
+      } else {
+        nextRan = true;
+        log?.({ level: 'warning', source: 'console', text: 'app logged /next' });
+      }
+    },
+  });
+  let call: ReturnType<HeldTestAttachment['call']> | undefined;
+  const project = createProject({ 'tests/paused.e2e.ts': `import { test } from 'e2e';
+test('opens a page after the pause', async ({ app, screen }) => {
+  await screen.pause();
+  await app.open('/next');
+});
+` });
+  const run = runExisting(project, {
+    config: { targets: [{ name: 'fake', platform: 'fake', engine, app: FAKE_APP }], trace: 'on' },
+    runOptions: {
+      hold: {
+        steps: false,
+        ask: async (step, { attach }) => {
+          const attached = await attach(step.attachId);
+          call = attached.call('navigate', { url: '/attached' });
+          await Promise.race([
+            started.promise,
+            call.then((result) => {
+              throw new Error(`the tool returned before starting the action: ${JSON.stringify(result)}`);
+            }),
+          ]);
+        },
+      },
+    },
+  });
+  try {
+    await vi.waitFor(() => expect(nextRan).toBe(true), { timeout: 5_000 });
+    expect(await call).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: expect.stringContaining('the test resumed') }],
+    });
+    finish.open();
+    const outcome = await run;
+    expect(resultByTitle(outcome, 'opens a page after the pause').status).toBe('passed');
+    const traces = contentsUnder(path.join(project.dir, '.e2e/results')).filter(([file]) => file.endsWith('trace.md'));
+    expect(traces).toHaveLength(1);
+    expect(traces[0]?.[1]).toContain('app logged /next');
+  } finally {
+    finish.open();
+    try {
+      await run;
+    } finally {
+      project.cleanup();
+    }
+  }
+});
+
+it('keeps attached project tool output out of the run and report', async () => {
+  const builtOutput = '../../dist/run/process-output.js';
+  const { withProcessOutput }: typeof import('../../src/run/process-output.ts') = await import(builtOutput);
+  const line = 'printed during an attached call';
+  const project = createProject({
+    'tests/paused.e2e.ts': `import { test } from 'e2e';
+test('prints and pauses', async ({ screen }) => {
+  process.stdout.write('printed by the test\\n');
+  await screen.pause();
+});
+`,
+    'e2e.config.ts': `import { defineTool } from 'e2e/agent';
+import { z } from 'zod';
+import { createFakeEngine, FAKE_APP } from '../../helpers/fake-engine.ts';
+
+export default {
+  targets: [{ name: 'fake', platform: 'fake', engine: createFakeEngine({}).engine, app: FAKE_APP }],
+  agents: { default: { tools: {
+    print_line: defineTool({
+      inputSchema: z.object({}),
+      execute: async () => {
+        process.stdout.write(${JSON.stringify(line + '\n')});
+        return 'printed';
+      },
+    }, { mutates: false }),
+  } } },
+};
+`,
+  });
+  const printTool = defineTool({
+    inputSchema: z.object({}),
+    execute: async () => {
+      process.stdout.write(`${line}\n`);
+      return 'printed';
+    },
+  }, { mutates: false });
+  let output = '';
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+    output += String(chunk);
+    return true;
+  });
+
+  try {
+    for (const worker of ['in-process', 'child process']) {
+      output = '';
+      const outcome = await withProcessOutput(new SecretLedger(), (processOutput) => {
+        const runOptions: Partial<RunOptions> = {
+          quiet: false,
+          processOutput,
+          hold: {
+            steps: false,
+            ask: async (step, { attach }) => {
+              const attached = await attach(step.attachId);
+              const reply = await attached.call('print_line', {});
+              expect(reply).toEqual({ content: [{ type: 'text', text: 'printed' }] });
+            },
+          },
+        };
+
+        if (worker === 'child process') {
+          return runExistingWithConfigFile(project, { runOptions });
+        }
+
+        return runExisting(project, {
+          config: { agents: { default: { tools: { print_line: printTool } } } },
+          runOptions,
+        });
+      });
+
+      expect(outcome.exitCode, worker).toBe(0);
+      expect(output, worker).toContain('printed by the test');
+      expect(output, worker).not.toContain(line);
+      expect(readFileSync(path.join(project.dir, '.e2e/report.json'), 'utf8'), worker).not.toContain(line);
+    }
+  } finally {
+    stdout.mockRestore();
+    project.cleanup();
+  }
 });
 
 describe('holding steps and the run limits', () => {

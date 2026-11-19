@@ -14,7 +14,7 @@ import { packageVersion } from '@e2e-dev/core/lib/internal/package-version';
 import { MAX_TIMER_MS } from '@e2e-dev/core/lib/internal/time';
 import { classifyError, codedMessage, exitCodeForCategory } from '@e2e-dev/core/lib/internal/errors';
 import type { Shard, TagMode } from '../collect/select.ts';
-import { listSelection, run, type ListedPair, type RunOptions, type RunOutcome } from '../run/runner.ts';
+import { listSelection, type ListedPair, type RunOptions, type RunOutcome } from '../run/runner.ts';
 import { claimRunnerOutput } from './run-output.ts';
 import { writeTerminal } from '../run/process-output.ts';
 import { STEP_BOUNDS, TIMEOUT_BOUNDS } from '../explore/bounds.ts';
@@ -39,9 +39,8 @@ import { parseList, parseNames } from './parse-names.ts';
 import { SESSION_BOUNDS } from '../mcp/bounds.ts';
 import { PROVIDER_NAMES } from '../oauth/provider-ids.ts';
 import type { LoginFlags } from '../oauth/cli.ts';
-import { Keyboard } from './keyboard.ts';
 import { SignalLadder } from './signals.ts';
-import { isStepAction, StepGate, stepKeyOf } from './step.ts';
+import { isStepAction } from './step.ts';
 import { stepAddress } from '../run/step-socket.ts';
 import { skillTopics } from './skill.ts';
 import { UpdateCheck } from './update-check.ts';
@@ -372,25 +371,6 @@ async function driveStepped(command: Command, drive: () => Promise<number>): Pro
     process.exitCode = await drive();
   } catch (cause) {
     command.error(`error: ${codedMessage(cause)}`, { exitCode: 2 });
-  }
-}
-
-/**
- * One run stepped through from the keyboard: raw-mode keys for the run's
- * whole length, so Ctrl-C (a keypress then, not a signal) still climbs the
- * ladder while a step runs, and `q` is the ladder's first rung.
- */
-async function stepped(options: RunOptions, signals: SignalLadder): Promise<RunOutcome> {
-  const gate = new StepGate(() => signals.escalate());
-  const keyboard = new Keyboard(process.stdin, stepKeyOf);
-  keyboard.listen((key) => {
-    if (key === 'suspend') keyboard.suspend();
-    else gate.press(key);
-  });
-  try {
-    return await run({ ...options, hold: { ask: gate.beforeStep, steps: true } });
-  } finally {
-    keyboard.close();
   }
 }
 
@@ -841,6 +821,7 @@ function createProgram(version: string, telemetry: Telemetry, updateCheck: Updat
                       forceSignal: AbortSignal.any([signals.forceSignal, cancel.forceSignal]),
                       processOutput: output,
                     },
+                    version,
                     cancel.stop,
                     stdin,
                     keys,
@@ -858,14 +839,17 @@ function createProgram(version: string, telemetry: Telemetry, updateCheck: Updat
             const base = { ...runOptions, interruptSignal: signals.interruptSignal, forceSignal: signals.forceSignal, processOutput: output };
             if (serveLog !== undefined) {
               const { serveSteps } = await import('./step-control.ts');
-              return serveSteps(base, signals, { ...stepAddress(process.cwd()), log: serveLog });
+              return serveSteps(base, version, signals, { ...stepAddress(process.cwd()), log: serveLog });
             }
-            if (options.step === true) {
-              return stepped(base, signals);
-            }
-
             const { servePauses } = await import('./step-control.ts');
-            return servePauses(base, () => signals.escalate(), hasTerminal() ? process.stdin : undefined);
+            return servePauses(
+              base,
+              version,
+              () => signals.escalate(),
+              hasTerminal() ? process.stdin : undefined,
+              undefined,
+              options.step === true,
+            );
           });
         } finally {
           output.end();

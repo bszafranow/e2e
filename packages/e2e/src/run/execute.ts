@@ -44,7 +44,8 @@ import { interruptedInPhase, interruptedSkip, pairKey, unitResult, unstartedResu
 import { carriedSecrets, processSecrets, redactForSession, sessionLedger, staticSecretLedger } from '@e2e-dev/core/lib/run/secrecy';
 import { SessionStaging } from '@e2e-dev/core/lib/run/sessions';
 import { isOwnStep, StepRecorder, type StepHoldRequest, type StepProgress } from '@e2e-dev/core/lib/run/steps';
-import { holdAttemptSteps, readHeldScreen, type AttemptHolds, type HeldStep, type StepHoldContext } from './step-hold.ts';
+import { holdAttemptSteps, readHeldScreen, type AttemptHolds, type StepHold, type StepHoldContext } from './step-hold.ts';
+import { HeldTestTools } from './worker/held-test-tools.ts';
 import { WorkerModels } from '@e2e-dev/core/lib/run/worker-models';
 import { classifyAttemptStatus, EngineSessions, type EngineSessionsOptions } from '@e2e-dev/core/lib/run/engine-sessions';
 import type { EngineDisposeContext } from '@e2e-dev/core/lib/engine/index';
@@ -91,7 +92,12 @@ type ExecutorHold = {
    * Asks the runner at each pause, and before each step when `steps` is set.
    * The runner can call `readScreen` to read the screen during the wait.
    */
-  readonly ask: (step: HeldStep, signal: AbortSignal, readScreen: StepHoldContext['readScreen']) => Promise<void>;
+  readonly ask: (
+    step: StepHold,
+    signal: AbortSignal,
+    readScreen: StepHoldContext['readScreen'],
+    tools: HeldTestTools,
+  ) => Promise<void>;
   /**
    * Set `steps` to wait at `ask` before each top-level step of a test's
    * first attempt (`e2e run --step`). Setup tests and retries aren't held.
@@ -484,6 +490,7 @@ export class TargetExecutor extends EngineSessions implements SerialHost {
     const redact = (text: string): string => redactForSession(openSession ?? undefined, this.config.allSecrets, text);
     // Set once the test clock exists, before the first step that could wait.
     let holds: AttemptHolds | undefined;
+    let heldTools: HeldTestTools | undefined;
     const hold = this.options.hold;
     const steps = new StepRecorder(attemptId, {
       ...(hold === undefined
@@ -680,32 +687,28 @@ export class TargetExecutor extends EngineSessions implements SerialHost {
       openSession = session;
       // A serial group's session serves one member at a time; what the app
       // logs from here is this attempt's.
-      session.appLog.route((event, at) => steps.recordAppEvent(event, at));
-      session.screens.route((observation) =>
+      session.appLog.route((event, at) => {
+        if (heldTools?.runningCall !== true) {
+          steps.recordAppEvent(event, at);
+        }
+      });
+      session.screens.route((observation) => {
+        if (heldTools?.runningCall === true) {
+          return;
+        }
+
         steps.recordScreen(() =>
           traceScreen(observation, {
             ledger: sessionLedger(session, this.config.allSecrets),
             maxBytes: this.config.limits.maxObservationBytes,
             appOrigin: this.target.app.base?.origin,
           }),
-        ),
-      );
+        );
+      });
 
       const testDeadline = new Deadline(pair.options.timeout);
       this.options.events?.onAttemptDeadline?.(pair, { index: attemptIndex, id: attemptId, startedAt });
       const budget = new AttemptBudget(attemptAbort.signal, testDeadline);
-      if (hold !== undefined) {
-        const screens = { ledger: sessionLedger(session, this.config.allSecrets), maxBytes: this.config.limits.maxObservationBytes, appOrigin: this.target.app.base?.origin };
-        holds = holdAttemptSteps({
-          budget,
-          signal: attemptAbort.signal,
-          attempt: { target: this.target.name, testId: pair.test.id, agent: pair.agent, repeat: pair.repeat, title: pair.test.titlePath.join(' › ') },
-          ask: hold.ask,
-          readScreen: (signal: AbortSignal) => readHeldScreen(session, this.op(attemptId, this.config.actionTimeout, signal), screens),
-          // The runner's watchdog keeps the test deadline too; it gets what is left.
-          onResume: (remainingMs) => this.options.events?.onAttemptDeadline?.(pair, { index: attemptIndex, id: attemptId, startedAt, remainingMs }),
-        });
-      }
       const saveSession =
         context.kind !== 'setup'
           ? undefined
@@ -725,7 +728,7 @@ export class TargetExecutor extends EngineSessions implements SerialHost {
                 carriedSecrets(sessionLedger(session, this.config.allSecrets), this.config.allSecrets),
               );
             };
-      const { fixtures: builtIns } = createFixtures({
+      const { fixtures: builtIns, agentRuntime } = createFixtures({
         config: inMemory?.agents === undefined ? this.config : { ...this.config, agents: inMemory.agents },
         target: this.target,
         session,
@@ -744,6 +747,36 @@ export class TargetExecutor extends EngineSessions implements SerialHost {
         models: this.models,
         test: { file: pair.test.file, titlePath: pair.test.titlePath, writtenScreenshots: this.writtenScreenshots },
       });
+      if (hold !== undefined) {
+        const tools = new HeldTestTools(agentRuntime, this.options.runId, pair.agent);
+        heldTools = tools;
+        const screens = {
+          ledger: sessionLedger(session, this.config.allSecrets),
+          maxBytes: this.config.limits.maxObservationBytes,
+          appOrigin: this.target.app.base?.origin,
+        };
+
+        holds = holdAttemptSteps({
+          budget,
+          signal: attemptAbort.signal,
+          attempt: {
+            target: this.target.name,
+            testId: pair.test.id,
+            agent: pair.agent,
+            repeat: pair.repeat,
+            title: pair.test.titlePath.join(' › '),
+          },
+          ask: (step, signal, readScreen) => hold.ask(step, signal, readScreen, tools),
+          readScreen: (signal: AbortSignal) => readHeldScreen(session, this.op(attemptId, this.config.actionTimeout, signal), screens),
+          // The runner's watchdog keeps the test deadline too; it gets what is left.
+          onResume: (remainingMs) => this.options.events?.onAttemptDeadline?.(pair, {
+            index: attemptIndex,
+            id: attemptId,
+            startedAt,
+            remainingMs,
+          }),
+        });
+      }
       // `expect.poll` and `expect.soft` take no fixture, so the attempt they
       // run on is published here and cleared when `attemptEnd` fires in `finally`.
       const soft = new SoftFailures();
@@ -857,9 +890,14 @@ export class TargetExecutor extends EngineSessions implements SerialHost {
           attemptAbort.abort();
           return new TestTimeoutError(`test timed out after ${pair.options.timeout} ms in phase ${phase}`);
         };
-        await this.debug.time('test.body', () =>
+        const bodyWork = this.debug.time('test.body', () =>
           holds === undefined ? withTimeout(body, Math.max(1, testDeadline.remaining()), onTimeout) : holds.race(body, onTimeout),
         );
+
+        await bodyWork.finally(() => heldTools?.end(new ConfigurationError(
+          'NO_SESSION',
+          this.interruptSignal.aborted ? 'the run was interrupted' : 'the test attempt ended',
+        )));
       } catch (cause) {
         // The race has settled: a rejection surfacing while the evidence is
         // captured is recorded, not aimed at it.

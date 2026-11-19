@@ -90,9 +90,9 @@ e2e mcp --max-sessions 8 # default: 4
 
 #### `open_session`
 
-Loads the config, starts the target's app command, boots the engine, starts
-one attempt, and opens the app: its URL when the engine can navigate, or on a
-device the [pinned app](/mobile#point-at-your-app), launched fresh. It installs
+Without `attach`, starts a new attempt using the config, engine, and app
+command for the target. The app opens at its URL or starts fresh on a
+device from the [pinned app](/mobile#point-at-your-app). It installs
 no build, so a local device target needs `app.bundleId`. Returns the session
 id, the catalog, and the first observation. The summary above the observation
 tells the agent to read the `writing-tests` guide (`e2e://guide/writing-tests`) before it
@@ -121,6 +121,7 @@ open_session {target: "web", headed: true}
 | `test` | string | no | One test to run first, named like an `e2e run` positional. The session stops where the test stopped. See [Running a test](#running-a-test). |
 | `engine` | string or object | no | The session's engine in a directory with no config file, as a package name or `{package, export, options}`. See [Without a config](#without-a-config). |
 | `app` | object | no | The app under test for an `engine` session, as `url`, `bundleId`, or `appPath`. |
+| `attach` | string | no | ID of a [held test](#attaching-to-a-held-test), such as `p1`. Set it without the other fields. |
 
 #### `tools`
 
@@ -165,7 +166,7 @@ call {tool: "tap", args: {target: "n42"}, session: "<id>"}
 
 Saves a recording still running, ends the attempt, and disposes the engine.
 It stops the app processes the session started once no other session uses
-them.
+them. Use it on an attachment to detach and leave the test held.
 
 ```txt
 close_session {session: "<id>"}
@@ -609,6 +610,27 @@ Sessions enforce what tests enforce:
   stay.
 - A queued call cancelled by the client does not execute when its turn
   arrives.
+
+## Attaching to a held test
+
+Use the ID in the pause header, such as `Paused (p1)`, to connect to that
+test's app. Start the MCP server from the run's directory and use the same
+e2e version for `e2e mcp` and `e2e run`.
+
+```txt
+open_session {attach: "p1"}
+```
+
+Pass only `attach`. Use `tools` and `call` to inspect or drive the app.
+While attached, you can't use `run_code`, recording tools, or `type_secret`.
+Use `screenshot` to get an image without saving a file.
+
+Use `close_session` to detach and leave the test held. Press Enter or run
+`npx e2e run --step next` to resume the test and end the attachment.
+
+Attached calls aren't recorded as steps in the report or trace. App logs
+and screen updates aren't recorded during an attached call. You may see
+late effects in the trace after the call returns or is cancelled by a resume.
 
 ## Running a test
 

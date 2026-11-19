@@ -80,14 +80,14 @@ describe('e2e run --step without a terminal', () => {
     const { dir } = project();
     const started = e2e(dir, ['run', '--step', '--', 'tests/pages.e2e.ts']);
     expect(started.exitCode).toBe(0);
-    expect(started.stdout).toMatch(/✓ app\.open "\/one" \d+ms\nPaused before step 2 of opens three pages \[fake\]:/);
+    expect(started.stdout).toMatch(/✓ app\.open "\/one" \d+ms\nPaused \(p1\) before step 2 of opens three pages \[fake\]:/);
     expect(started.stdout).toContain('app.open "/two" (tests/pages.e2e.ts:5)');
     expect(started.stdout).toContain('button "Submit"');
 
     const next = e2e(dir, ['run', '--step', 'next']);
     expect(next.exitCode).toBe(0);
     expect(next.stdout).toContain('✓ app.open "/two"');
-    expect(next.stdout).toContain('Paused before step 3 of opens three pages [fake]:');
+    expect(next.stdout).toContain('Paused (p1) before step 3 of opens three pages [fake]:');
     expect(next.stdout).toContain('app.open "/three"');
 
     const last = e2e(dir, ['run', '--step', 'rest']);
@@ -222,7 +222,7 @@ test('waits between pages', async ({ app }) => {
     const missed = e2e(dir, ['run', '--step', 'next']);
     expect(missed.exitCode).toBe(0);
     expect(missed.stdout).toContain('e2e run --step next was not applied: the step below was held while no command waited');
-    expect(missed.stdout).toContain('Paused before step 3');
+    expect(missed.stdout).toContain('Paused (p1) before step 3');
     expect(missed.stdout).not.toContain('✓ app.open "/three"');
 
     const last = e2e(dir, ['run', '--step', 'next']);

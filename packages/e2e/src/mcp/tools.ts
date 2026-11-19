@@ -130,12 +130,17 @@ function standardJsonSchema(schema: unknown): unknown {
  * one), the first sentence of the description, and the read-only mark.
  * `- tap {target}: Tap or click one node.`
  */
-export function catalogLine(name: string, tool: ToolSet[string], readOnly: boolean): string {
+export function catalogLine(
+  name: string,
+  tool: ToolSet[string],
+  readOnly: boolean,
+  redact: (text: string) => string = (text) => text,
+): string {
   const schema = toolJsonSchema(tool);
   const required = new Set(schema.required ?? []);
   const args = Object.keys(schema.properties ?? {}).map((key) => (required.has(key) ? key : `${key}?`));
   const signature = args.length === 0 ? name : `${name} {${args.join(', ')}}`;
-  return `- ${signature}: ${firstSentence(toolDescription(name, tool))}${readOnly ? ' [read-only]' : ''}`;
+  return `- ${redact(signature)}: ${firstSentence(redact(toolDescription(name, tool)))}${readOnly ? ' [read-only]' : ''}`;
 }
 
 /** The full contract of one tool: its description and the JSON Schema of its arguments. */

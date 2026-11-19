@@ -193,6 +193,7 @@ function terminalRun(dir: string, stdin: NodeJS.ReadStream) {
 
   const outcome = servePauses(
     { cwd: dir, env: ENV, interruptSignal: interrupt.signal, processOutput: output.processOutput },
+    '0.0.0',
     () => interrupt.abort(),
     stdin,
   );
@@ -234,7 +235,7 @@ describe('screen.pause() without a terminal', () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const run = start(dir, ['run']);
     await run.shows('Next: e2e run --step next to resume the test');
-    expect(run.stdout()).toContain('Paused in pauses past its timeout [fake]:\n  screen.pause() (tests/pause.e2e.ts:5)\nScreen:');
+    expect(run.stdout()).toContain('Paused (p1) in pauses past its timeout [fake]:\n  screen.pause() (tests/pause.e2e.ts:5)\nScreen:');
     expect(run.stdout()).toContain('button "Submit"');
     await sleep(TIMEOUT_MS + 500);
 
@@ -253,18 +254,18 @@ describe('screen.pause() without a terminal', () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const run = start(dir, ['run', '--reporter', 'json']);
     await run.shows('Next: e2e run --step next to resume the test');
-    expect(run.stderr()).toContain('Paused in pauses past its timeout [fake]:');
+    expect(run.stderr()).toContain('Paused (p1) in pauses past its timeout [fake]:');
 
     expect(e2e(dir, ['run', '--step', 'next']).stdout).toBe('The run has ended.\n');
     expect(await run.exited).toBe(0);
-    expect(run.stdout()).not.toContain('Paused in');
+    expect(run.stdout()).not.toContain('Paused (p');
     expect(JSON.parse(run.stdout())).toMatchObject({ run: { results: [{ status: 'passed' }] } });
   }, 60_000);
 
   it('stops the run on e2e run --step stop', async () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const run = start(dir, ['run']);
-    await run.shows('Paused in pauses past its timeout');
+    await run.shows('Paused (p1) in pauses past its timeout');
 
     const stopped = e2e(dir, ['run', '--step', 'stop']);
     expect(stopped.exitCode).toBe(130);
@@ -276,20 +277,20 @@ describe('screen.pause() without a terminal', () => {
   it('resumes the paused test on next or rest alike, and lists only next and stop', async () => {
     const { dir } = project({ 'tests/pause.e2e.ts': pausing('pauses three times', 3) });
     const run = start(dir, ['run']);
-    await run.shows('Paused in pauses three times');
+    await run.shows('Paused (p1) in pauses three times');
     expect(run.stdout()).toContain('Next: e2e run --step next to resume the test, or e2e run --step stop to end the run.\n');
 
     const next = e2e(dir, ['run', '--step', 'next']);
     expect(next.exitCode).toBe(0);
-    expect(next.stdout).toContain('Paused in pauses three times [fake]:\n  screen.pause() (tests/pause.e2e.ts:6)');
+    expect(next.stdout).toContain('Paused (p1) in pauses three times [fake]:\n  screen.pause() (tests/pause.e2e.ts:6)');
 
     const rest = e2e(dir, ['run', '--step', 'rest']);
     expect(rest.exitCode).toBe(0);
-    expect(rest.stdout).toContain('Paused in pauses three times [fake]:\n  screen.pause() (tests/pause.e2e.ts:7)');
+    expect(rest.stdout).toContain('Paused (p1) in pauses three times [fake]:\n  screen.pause() (tests/pause.e2e.ts:7)');
 
     expect(e2e(dir, ['run', '--step', 'rest']).stdout).toBe('The run has ended.\n');
     expect(await run.exited).toBe(0);
-    expect(run.stdout().split('Paused in').length - 1).toBe(3);
+    expect(run.stdout().split('Paused (p').length - 1).toBe(3);
   }, 60_000);
 
   it("says a command that came before a pause wasn't applied, and answers it at the next pause", async () => {
@@ -307,7 +308,7 @@ test('pauses after a wait', { timeout: 30_000 }, async ({ app, screen }) => {
 `,
     });
     const run = start(dir, ['run']);
-    await run.shows('Paused in pauses after a wait');
+    await run.shows('Paused (p1) in pauses after a wait');
     const resumed = start(dir, ['run', '--step', 'next']);
     // Wait until the test is past the release and waiting in its loop, not paused.
     await run.shows('released the first pause');
@@ -350,15 +351,15 @@ test('pauses after a wait', { timeout: 30_000 }, async ({ app, screen }) => {
       workerFakeConfigSource(3),
     );
     const run = start(dir, ['run']);
-    await run.shows('Paused in');
+    await run.shows('Paused (p');
     await run.shows('never pauses');
-    expect(run.stdout().split('Paused in').length - 1).toBe(1);
-    const first = run.stdout().includes('Paused in first pauser') ? 'first pauser' : 'second pauser';
+    expect(run.stdout().split('Paused (p').length - 1).toBe(1);
+    const first = run.stdout().includes('Paused (p1) in first pauser') ? 'first pauser' : 'second pauser';
     const second = first === 'first pauser' ? 'second pauser' : 'first pauser';
 
     const next = e2e(dir, ['run', '--step', 'next']);
     expect(next.exitCode).toBe(0);
-    expect(next.stdout).toContain(`Paused in ${second} [fake]:`);
+    expect(next.stdout).toContain(`Paused (p2) in ${second} [fake]:`);
 
     expect(e2e(dir, ['run', '--step', 'next']).stdout).toBe('The run has ended.\n');
     expect(await run.exited).toBe(0);
@@ -408,7 +409,7 @@ test('pauses later', { timeout: 30_000 }, async ({ app, screen }) => {
 
     expect(e2e(dir, ['run', '--step', 'stop']).exitCode).toBe(130);
     writeFileSync(path.join(dir, 'go'), '');
-    await run.shows('Paused in pauses later');
+    await run.shows('Paused (p2) in pauses later');
 
     expect(e2e(dir, ['run', '--step', 'next']).stdout).toBe('The run has ended.\n');
     expect(await run.exited).toBe(2);
@@ -421,10 +422,14 @@ test('pauses later', { timeout: 30_000 }, async ({ app, screen }) => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const started = e2e(dir, ['run', '--step']);
     expect(started.exitCode).toBe(0);
-    expect(started.stdout).toMatch(/✓ app\.open "\/one" \d+ms\nPaused in pauses past its timeout \[fake\]:\n {2}screen\.pause\(\) \(tests\/pause\.e2e\.ts:5\)/);
+    expect(started.stdout).toMatch(new RegExp(
+      String.raw`✓ app\.open "\/one" \d+ms\n` +
+      String.raw`Paused \(p1\) in pauses past its timeout \[fake\]:\n {2}` +
+      String.raw`screen\.pause\(\) \(tests\/pause\.e2e\.ts:5\)`,
+    ));
 
     const next = e2e(dir, ['run', '--step', 'next']);
-    expect(next.stdout).toContain('Paused before step 2 of pauses past its timeout [fake]:');
+    expect(next.stdout).toContain('Paused (p1) before step 2 of pauses past its timeout [fake]:');
 
     const last = e2e(dir, ['run', '--step', 'next']);
     expect(last.stdout).toContain('1 passed (1)');
@@ -445,14 +450,22 @@ test('steps past two pauses', async ({ app, screen }) => {
 });
 `,
     });
-    expect(e2e(dir, ['run', '--step']).stdout).toContain('Paused before step 2 of steps past two pauses [fake]:');
+    expect(e2e(dir, ['run', '--step']).stdout).toContain('Paused (p1) before step 2 of steps past two pauses [fake]:');
 
     const rest = e2e(dir, ['run', '--step', 'rest']);
-    expect(rest.stdout).toMatch(/✓ app\.open "\/two" \d+ms\n✓ app\.open "\/three" \d+ms\nPaused in steps past two pauses \[fake\]:\n {2}screen\.pause\(\) \(tests\/pause\.e2e\.ts:7\)/);
+    expect(rest.stdout).toMatch(new RegExp(
+      String.raw`✓ app\.open "\/two" \d+ms\n✓ app\.open "\/three" \d+ms\n` +
+      String.raw`Paused \(p1\) in steps past two pauses \[fake\]:\n {2}` +
+      String.raw`screen\.pause\(\) \(tests\/pause\.e2e\.ts:7\)`,
+    ));
     expect(rest.stdout).toContain('Next: e2e run --step next to resume the test, e2e run --step rest to resume it without holding any more steps, or e2e run --step stop to end the run.');
 
     const later = e2e(dir, ['run', '--step', 'rest']);
-    expect(later.stdout).toMatch(/✓ app\.open "\/four" \d+ms\nPaused in steps past two pauses \[fake\]:\n {2}screen\.pause\(\) \(tests\/pause\.e2e\.ts:9\)/);
+    expect(later.stdout).toMatch(new RegExp(
+      String.raw`✓ app\.open "\/four" \d+ms\n` +
+      String.raw`Paused \(p1\) in steps past two pauses \[fake\]:\n {2}` +
+      String.raw`screen\.pause\(\) \(tests\/pause\.e2e\.ts:9\)`,
+    ));
 
     const last = e2e(dir, ['run', '--step', 'next']);
     expect(last.stdout).toContain('1 passed (1)');
@@ -481,7 +494,7 @@ test('after', async ({ app }) => {
     expect(ran.stdout).toContain('STEP_NOT_AWAITED: the test body returned before screen.pause() finished');
     expect(ran.stdout).toContain('tests/pause.e2e.ts:5');
     expect(ran.stdout).not.toContain('CANCELLED');
-    expect(ran.stdout).not.toContain('Paused in');
+    expect(ran.stdout).not.toContain('Paused (p');
     expect(ran.stdout).toContain('1 failed');
     expect(ran.stdout).toContain('1 passed');
   }, 60_000);
@@ -518,7 +531,7 @@ test('pauses in a step', async ({ app, agent, screen }) => {
     const ran = e2e(dir, ['run']);
     expect(ran.exitCode, ran.stdout + ran.stderr).toBe(1);
     expect(ran.stdout).toContain('ACTION_FAILED: screen.pause() was called inside another step (an onAction hook or a project tool) or an expect.poll read');
-    expect(ran.stdout).not.toContain('Paused in');
+    expect(ran.stdout).not.toContain('Paused (p');
   }, 60_000);
 });
 
@@ -530,13 +543,13 @@ describe('screen.pause() when the run ends', () => {
     );
 
     const run = start(dir, ['run']);
-    await run.shows('Paused in');
+    await run.shows('Paused (p');
     await marked(dir, 'a-paused', 'b-paused');
 
     const stopped = e2e(dir, ['run', '--step', 'stop']);
     expect(stopped.stdout).toBe('The run has ended.\n');
     expect(await run.exited).toBe(130);
-    expect(run.stdout().split('Paused in').length - 1).toBe(1);
+    expect(run.stdout().split('Paused (p').length - 1).toBe(1);
     expect(existsSync(stepAddress(dir).socket)).toBe(false);
   }, 60_000);
 
@@ -603,10 +616,10 @@ describe('screen.pause() in --watch without a terminal', () => {
 
     // Save after the first run ends, when the test directory is watched.
     writeFileSync(file, readFileSync(file, 'utf8'));
-    await shows(1, 'Paused in pauses in watch [fake]:\n  screen.pause() (tests/pause.e2e.ts:5)');
+    await shows(1, 'Paused (p1) in pauses in watch [fake]:\n  screen.pause() (tests/pause.e2e.ts:5)');
     writeFileSync(file, readFileSync(file, 'utf8'));
     expect(e2e(dir, ['run', '--step', 'next']).stdout).toBe('The run has ended.\n');
-    await shows(2, 'Paused in pauses in watch [fake]:\n  screen.pause() (tests/pause.e2e.ts:5)');
+    await shows(2, 'Paused (p1) in pauses in watch [fake]:\n  screen.pause() (tests/pause.e2e.ts:5)');
     await shows(1, '1 passed (1)');
 
     const stopped = e2e(dir, ['run', '--step', 'stop']);
@@ -628,7 +641,7 @@ describe('screen.pause() in a terminal', () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const stdin = fakeStdin();
     const run = terminalRun(dir, stdin);
-    await run.shows('paused in pauses past its timeout [fake]: screen.pause() (tests/pause.e2e.ts:5)');
+    await run.shows('paused (p1) in pauses past its timeout [fake]: screen.pause() (tests/pause.e2e.ts:5)');
     expect(stdin.setRawMode.mock.calls.map(([raw]) => raw)).toEqual([true]);
     await sleep(KEY_GUARD_MS);
 
@@ -642,7 +655,7 @@ describe('screen.pause() in a terminal', () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const stdin = fakeStdin();
     const run = terminalRun(dir, stdin);
-    await run.shows('paused in pauses past its timeout [fake]');
+    await run.shows('paused (p1) in pauses past its timeout [fake]');
     await sleep(KEY_GUARD_MS);
 
     stdin.write('q');
@@ -654,7 +667,7 @@ describe('screen.pause() in a terminal', () => {
     const { dir } = project({ 'tests/pause.e2e.ts': pausing('pauses twice', 2) });
     const stdin = fakeStdin();
     const run = terminalRun(dir, stdin);
-    await run.shows('paused in pauses twice [fake]: screen.pause() (tests/pause.e2e.ts:5)');
+    await run.shows('paused (p1) in pauses twice [fake]: screen.pause() (tests/pause.e2e.ts:5)');
     await sleep(KEY_GUARD_MS);
 
     stdin.write('n');
@@ -662,7 +675,7 @@ describe('screen.pause() in a terminal', () => {
     // Check after those keys. If either had resumed the first pause, this
     // command would resume the second and end the run.
     const next = start(dir, ['run', '--step', 'next']);
-    await next.shows('Paused in pauses twice [fake]:\n  screen.pause() (tests/pause.e2e.ts:6)');
+    await next.shows('Paused (p1) in pauses twice [fake]:\n  screen.pause() (tests/pause.e2e.ts:6)');
     expect(await next.exited).toBe(0);
     await sleep(KEY_GUARD_MS);
 
@@ -674,7 +687,7 @@ describe('screen.pause() in a terminal', () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const stdin = fakeStdin();
     const run = terminalRun(dir, stdin);
-    await run.shows('paused in pauses past its timeout [fake]');
+    await run.shows('paused (p1) in pauses past its timeout [fake]');
     // Connect while the test is paused, then send the command after the run ends.
     const late = net.connect(stepAddress(dir).socket);
     await once(late, 'connect');
@@ -711,11 +724,11 @@ export default {
     const { dir } = project({ 'observed.txt': '', 'tests/pause.e2e.ts': pausing('pauses twice', 2) }, config);
     const observed = () => readFileSync(path.join(dir, 'observed.txt'), 'utf8');
     const run = terminalRun(dir, fakeStdin());
-    await run.shows('paused in pauses twice [fake]: screen.pause() (tests/pause.e2e.ts:5)');
+    await run.shows('paused (p1) in pauses twice [fake]: screen.pause() (tests/pause.e2e.ts:5)');
     expect(observed()).toBe('');
 
     const next = start(dir, ['run', '--step', 'next']);
-    await next.shows('Paused in pauses twice [fake]:\n  screen.pause() (tests/pause.e2e.ts:6)\nScreen:');
+    await next.shows('Paused (p1) in pauses twice [fake]:\n  screen.pause() (tests/pause.e2e.ts:6)\nScreen:');
     expect(await next.exited).toBe(0);
     expect(observed()).toBe('observe\n');
 
@@ -728,7 +741,7 @@ export default {
   it('resumes the test on e2e run --step next from another shell', async () => {
     const { dir } = project({ 'tests/pause.e2e.ts': PAUSE_SUITE });
     const run = terminalRun(dir, fakeStdin());
-    await run.shows('paused in pauses past its timeout [fake]');
+    await run.shows('paused (p1) in pauses past its timeout [fake]');
 
     // Spawn the command because the paused run answers it in this process.
     const next = start(dir, ['run', '--step', 'next']);
@@ -750,12 +763,13 @@ export default {
 
     const outcome = servePauses(
       { cwd: dir, env: ENV, files: ['tests/pause.e2e.ts'], interruptSignal: interrupt.signal, processOutput: output.processOutput },
+      '0.0.0',
       () => interrupt.abort(),
       stdin,
     );
 
     inProcess.push({ stop: () => interrupt.abort(), done: outcome.catch(() => undefined) });
-    await output.shows('paused in pauses past its timeout [fake]');
+    await output.shows('paused (p1) in pauses past its timeout [fake]');
     expect(output.printed()).toContain(
       'Another run in this directory is controlled with e2e run --step commands, so use the keys for this run.\n',
     );
@@ -774,7 +788,7 @@ export default {
     try {
       const stdin = fakeStdin();
       const run = terminalRun(dir, stdin);
-      await run.shows('paused in pauses past its timeout [fake]');
+      await run.shows('paused (p1) in pauses past its timeout [fake]');
       expect(run.printed()).toContain(
         `RUNNER_BUSY: ${lock} was left by a run killed while it took control of this directory; remove it and run again\nOnly the keys work for this run.\n`,
       );
@@ -804,6 +818,7 @@ export default {
             forceSignal: cancel.forceSignal,
             processOutput: output.processOutput,
           },
+          '0.0.0',
           cancel.stop,
           stdin,
           keys,
@@ -821,7 +836,7 @@ export default {
     // On cleanup, the watch session and its run are ended with one signal, as
     // with Ctrl-C.
     inProcess.push({ stop: () => signals.escalate(), done: session });
-    await output.shows('paused in pauses in watch [fake]');
+    await output.shows('paused (p1) in pauses in watch [fake]');
     // The keys are read by watch mode first, then by the pause prompt.
     expect(stdin.setRawMode.mock.calls.map(([raw]) => raw)).toEqual([true, false, true]);
     await sleep(KEY_GUARD_MS);
@@ -857,6 +872,7 @@ export default {
             forceSignal: cancel.forceSignal,
             processOutput: output.processOutput,
           },
+          '0.0.0',
           cancel.stop,
           stdin,
           keys,
@@ -869,7 +885,7 @@ export default {
       watch: () => ({ close: () => undefined, on: () => undefined }),
     });
     inProcess.push({ stop: () => signals.escalate(), done: session });
-    await output.shows('paused in pauses in watch [fake]');
+    await output.shows('paused (p1) in pauses in watch [fake]');
     await sleep(KEY_GUARD_MS);
 
     stdin.write('q');
@@ -890,6 +906,6 @@ describe('screen.pause() in CI', () => {
     expect(ran.exitCode).toBe(1);
     expect(ran.stdout).toContain('PAUSE_UNAVAILABLE');
     expect(ran.stdout).toContain('tests/pause.e2e.ts:5');
-    expect(ran.stdout).not.toContain('Paused in');
+    expect(ran.stdout).not.toContain('Paused (p');
   });
 });

@@ -65,8 +65,8 @@ export interface CatalogOptions {
   readonly redaction: NodeRedaction;
   /** Where a relative `screenshot` path resolves. */
   readonly projectRoot: string;
-  /** The attempt's artifact directory, where the engine writes a screenshot before `screenshot` copies it out. */
-  readonly attemptDir: string;
+  /** Set to the attempt's artifact directory to allow `screenshot` to save a file. */
+  readonly attemptDir?: string;
   /** The session's recorder, when the engine records video. */
   readonly recorder: SessionRecorder | undefined;
   /** The target's app URL, which a navigation's test line is made relative to. */
@@ -84,7 +84,7 @@ export interface CatalogOptions {
 
 /** Builds the session's catalog from the step context and the target. */
 export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
-  const { screen, locator } = options;
+  const { screen, locator, attemptDir } = options;
   const lines = new SessionTestLines({
     query: locateQuery,
     resolve: (expression) => locator.resolveNow(expression),
@@ -100,7 +100,7 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
   const { observe: _diffObserve, ...verbs } = grammarTools(context, {
     screen,
     onActionFailed: options.onActionFailed,
-    saveScreenshot: (file) => saveScreenshot(options, file),
+    ...(attemptDir === undefined ? {} : { saveScreenshot: (file: string) => saveScreenshot(options, attemptDir, file) }),
   });
   const recording = options.recorder === undefined ? {} : recordingTools(options.recorder);
   const builtIn: ToolSet = {
@@ -131,14 +131,20 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
  * As with `upload`, a path outside the project or under a hidden directory
  * is refused.
  */
-async function saveScreenshot(options: CatalogOptions, file: string): Promise<string> {
+async function saveScreenshot(options: CatalogOptions, attemptDir: string, file: string): Promise<string> {
   const destination = path.resolve(options.projectRoot, file);
   const relative = relativeToProjectRoot(options.projectRoot, destination);
   if (relative === undefined) throw new ConfigurationError('POLICY_DENIED', `${JSON.stringify(file)} is outside the project root; screenshots are saved inside the project`);
   if (relative.split(path.sep).some((segment) => segment.startsWith('.'))) {
     throw new ConfigurationError('POLICY_DENIED', `${JSON.stringify(file)} is a hidden file or sits under a hidden directory; screenshots are never saved there`);
   }
-  const source = path.join(options.attemptDir, await options.session.artifacts.screenshot(path.basename(destination, path.extname(destination)), options.locator.operation()));
+  const source = path.join(
+    attemptDir,
+    await options.session.artifacts.screenshot(
+      path.basename(destination, path.extname(destination)),
+      options.locator.operation(),
+    ),
+  );
   mkdirSync(path.dirname(destination), { recursive: true });
   copyFileSync(source, destination);
   rmSync(source, { force: true });

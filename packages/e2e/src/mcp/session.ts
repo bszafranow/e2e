@@ -1,16 +1,15 @@
 /**
- * The live sessions behind `e2e mcp`: each one standalone attempt on one
- * target with one interactive agent step open on it, driven by a coding agent
- * through a fixed, four-tool surface. `open_session` loads the project's
- * config, or builds one around the engine package it names where the project
- * has none, and opens the attempt and the step; `tools` renders the session's
- * catalog; `call` runs one catalog tool by name inside the step;
- * `close_session` ends the step, saves a recording still running, and tears
- * the attempt down. Several sessions may be open at once, up to the server's
- * limit, so parallel agents each drive their own browser; a call names its
- * session by id, and may leave it out only while one is open. The catalog is
- * data, not registrations, so it follows the config and the target without a
- * restart and the client's tool list never changes.
+ * The live sessions behind `e2e mcp`. A session is a standalone attempt or a
+ * connection to a held test.
+ *
+ * Use `open_session` to start an attempt from a project config, pass an engine
+ * in a project without a config, or attach to a held test. For a held test,
+ * requests reach the worker through the step socket.
+ *
+ * Use `tools` to read the catalog, `call` to run a catalog tool, and
+ * `close_session` to end the attempt or detach from the test. Several
+ * sessions can be open up to the server's limit. Pass a session ID when
+ * more than one session is open.
  */
 
 import { z } from 'zod';
@@ -21,9 +20,11 @@ import type { ResolvedConfig, ResolvedTarget } from '@e2e-dev/core/lib/config/re
 import { launchesPinnedApp } from '@e2e-dev/core/lib/config/targets';
 import { secretHandle } from '@e2e-dev/core/lib/secrets';
 import { classifyError, ConfigurationError, errorMessage, InfrastructureError, type SerializedError } from '@e2e-dev/core/lib/internal/errors';
+import { abortError, cancelledError } from '@e2e-dev/core/lib/internal/time';
 import { LocatorEngine } from '@e2e-dev/core/lib/locator/engine';
 import { allocateTargetPorts } from '../run/app-ports.ts';
 import { selectTarget } from '../run/select-target.ts';
+import { NO_HELD_TEST, type HeldTestAttachment } from '../run/step-attachment-wire.ts';
 import { SharedAppProcesses } from '@e2e-dev/core/lib/run/process-pool';
 import { outputLayout } from '@e2e-dev/core/lib/run/output';
 import { processSecrets, registerStaticSecrets } from '@e2e-dev/core/lib/run/secrecy';
@@ -54,6 +55,7 @@ export const READ_WRITING_GUIDE = 'Before you write or edit a test, read the wri
 
 interface LiveSession {
   readonly id: string;
+  readonly kind: 'standalone';
   readonly target: ResolvedTarget;
   /** Where the session's config came from, as the opening summary says it. */
   readonly origin: string;
@@ -71,7 +73,18 @@ interface LiveSession {
   readonly usage: SessionUsage;
 }
 
+type AttachedSession = {
+  readonly id: string;
+  readonly kind: 'attached';
+  readonly target: Pick<ResolvedTarget, 'name'>;
+  readonly attachment: HeldTestAttachment;
+};
+
+type Session = LiveSession | AttachedSession;
+
 export interface OpenSessionOptions {
+  /** Set to the ID in a pause header to attach to that test. */
+  readonly attach?: string | undefined;
   /** The target to open; otherwise the server's `--target`, else the config's only target. */
   readonly target?: string | undefined;
   /** A config file to load instead of the server's default, absolute or relative to the server's working directory. */
@@ -97,6 +110,8 @@ type ConfigSource = { readonly file: string } | { readonly engine: EngineSession
 const ENGINE_DEFAULTS = 'engine defaults, with no config file';
 
 export interface SessionHostOptions {
+  /** Supply a connector to enable attachments from the MCP server's working directory. */
+  readonly connectAttachment?: (id: string, signal: AbortSignal) => Promise<HeldTestAttachment>;
   /** The absolute path of the config a session loads, without evaluating it; `configPath` overrides the server's default. */
   readonly locateConfig: (configPath: string | undefined) => string;
   /**
@@ -125,7 +140,7 @@ export interface SessionHostOptions {
 
 /** Owns the live sessions, up to the server's limit, and the fixed MCP tools that drive them. */
 export class SessionHost {
-  private readonly sessions: SessionRegistry<LiveSession>;
+  private readonly sessions: SessionRegistry<Session>;
   /** Sessions on one app command share its process: the last one to close stops it. */
   private readonly apps = new SharedAppProcesses();
   /** Aborts every open still running once the server shuts down, so none leaves a process behind. */
@@ -159,6 +174,21 @@ export class SessionHost {
    * it, or disconnects, aborts the open and what it started.
    */
   open(options: OpenSessionOptions, signal?: AbortSignal): Promise<string> {
+    const { attach, target, config, test, engine, app } = options;
+
+    if (attach !== undefined) {
+      const clash = Object.entries({ target, config, test, engine, app, headed: options.headed })
+        .find(([, value]) => value !== undefined)?.[0];
+
+      if (clash !== undefined) {
+        return Promise.reject(
+          new ConfigurationError('INVALID_ARGUMENT', `open_session: attach cannot be combined with ${clash}`),
+        );
+      }
+
+      return this.sessions.admit((id) => this.openAttachment(id, attach, signal));
+    }
+
     const headed = options.headed ?? this.options.headed;
     const usage = new SessionUsage(this.sessions.liveCount, headed);
     return this.sessions.admit((id) => this.openSession(id, options, headed, usage, signal)).catch((cause: unknown) => {
@@ -180,7 +210,14 @@ export class SessionHost {
     return summaries.length === 0 ? undefined : summaries.join('\n');
   }
 
-  private async teardown(live: LiveSession, reason: string, endedBy: SessionEndedBy): Promise<string> {
+  /** Detaches from the test or closes the standalone attempt. Returns a summary. */
+  private async teardown(live: Session, reason: string, endedBy: SessionEndedBy): Promise<string> {
+    if (live.kind === 'attached') {
+      await live.attachment.detach();
+
+      return processSecrets.redact(`Session ${live.id} closed (${reason}).`);
+    }
+
     if (live.idleTimer !== undefined) clearTimeout(live.idleTimer);
     const { value, cleanupErrors } = await this.closeAttempt(live.attempt, live.abort, async () => {
       await live.step.end({ status: 'passed', summary: `session closed: ${reason}` });
@@ -221,8 +258,23 @@ export class SessionHost {
   }
 
   /** The session's catalog, or one tool's full contract. */
-  catalog(session: string | undefined, tool: string | undefined): string {
+  catalog(session: string | undefined, tool: string | undefined): string | Promise<string> {
     const live = this.sessions.resolve(session);
+    if (live.kind === 'attached') {
+      const { attachment, id, target } = live;
+
+      if (tool !== undefined) {
+        return attachment.detail(tool);
+      }
+
+      const { catalog } = attachment.opening;
+
+      return [
+        `Session ${id} on target "${target.name}": ${catalog.length} tools. ` +
+          "Run one with call {tool, args}. Use tools {tool} to see a tool's arguments.",
+        ...catalog,
+      ].join('\n');
+    }
     if (tool === undefined) {
       return [`Session ${live.id} on target "${live.target.name}": ${Object.keys(live.catalog.tools).length} tools. Run one with call {tool, args}; tools {tool} shows a tool's arguments.`, ...this.catalogLines(live)].join('\n');
     }
@@ -234,6 +286,10 @@ export class SessionHost {
   /** Runs one catalog tool inside the live session's step; what comes back, a result or a failure, passes the attempt's secret ledger. */
   call(session: string | undefined, name: string, args: Record<string, unknown>, extra: McpToolCallExtra): Promise<McpToolResult> {
     const live = this.sessions.resolve(session);
+    if (live.kind === 'attached') {
+      return live.attachment.call(name, args, extra.signal);
+    }
+
     const tool = live.catalog.tools[name];
     live.usage.called(name, live.catalog.project.has(name));
     if (tool === undefined) {
@@ -256,6 +312,48 @@ export class SessionHost {
         return redactResult(errorResult(cause), redact);
       },
     );
+  }
+
+  /** Opens an attachment and returns its summary, catalog, and first screen. */
+  private async openAttachment(id: string, attach: string, request?: AbortSignal): Promise<string> {
+    const opening = request === undefined ? this.shutdown.signal : AbortSignal.any([this.shutdown.signal, request]);
+    const connect = this.options.connectAttachment;
+    if (connect === undefined) {
+      throw new ConfigurationError('NO_SESSION', NO_HELD_TEST);
+    }
+
+    const attachment = await connect(attach, opening);
+
+    if (opening.aborted || attachment.signal.aborted) {
+      await attachment.detach();
+      throw abortError(opening.aborted ? opening : attachment.signal, cancelledError);
+    }
+
+    const { target, summary, catalog, observation } = attachment.opening;
+    const attachedSession: AttachedSession = {
+      kind: 'attached',
+      id,
+      target: { name: target },
+      attachment,
+    };
+    this.sessions.activate(attachedSession);
+    attachment.signal.addEventListener(
+      'abort',
+      () => this.endOnItsOwn(attachedSession, errorMessage(attachment.signal.reason), 'step'),
+      { once: true },
+    );
+
+    return [
+      `Session ${id} open on target "${target}". ${summary}`,
+      'Use close_session to detach. The test stays held until you press Enter in its terminal ' +
+        'or run npx e2e run --step next.',
+      `Pass session "${id}" to tools, call, and close_session.`,
+      'Run a tool with call {tool, args}. Use tools {tool} to see its arguments.',
+      ...catalog,
+      READ_WRITING_GUIDE,
+      '',
+      observation,
+    ].join('\n');
   }
 
   private async openSession(
@@ -364,6 +462,7 @@ export class SessionHost {
         runCode: { attempt, engineFixtures: Object.keys(target.engine?.fixtures ?? {}) },
       });
       const live: LiveSession = {
+        kind: 'standalone',
         id,
         target,
         origin:
@@ -421,7 +520,7 @@ export class SessionHost {
   }
 
   /** Closes a live session that ended without a close_session: its step concluded, or it sat idle. */
-  private endOnItsOwn(live: LiveSession, why: string, endedBy: SessionEndedBy): void {
+  private endOnItsOwn(live: Session, why: string, endedBy: SessionEndedBy): void {
     if (!this.sessions.isLive(live.id)) return;
     this.log('warning', `session ${live.id} ended: ${why}`);
     this.close(why, live.id, endedBy).catch((cause: unknown) => this.log('error', `closing session ${live.id} failed: ${errorMessage(cause)}`));
@@ -563,9 +662,19 @@ export class SessionHost {
   private openSpec(): McpToolSpec {
     return defineMcpTool({
       name: 'open_session',
-      description:
-        'Open a live session on one target of an e2e project: loads the config, starts the app command the target declares (if any), boots the engine (a browser, a simulator), opens the app (its URL, or the pinned app on a device), and returns the session id, the catalog of tools it can run, and the first observation. Where the project has no e2e config file, pass engine to open a session on that engine: {engine: "@e2e-dev/web", app: {url: "http://localhost:3000"}}. With test, it runs that one test first and stops on the screen where the test passed or failed, with the failure and its line ahead of the catalog. Several sessions can be open at once, one per agent, each with its own engine: pass the returned session id to every later call. Then act with call and look with call {tool: "observe"}.',
+      description: [
+        'Open a live session on one target of an e2e project.',
+        'For a standalone session, the target config determines the engine, app URL or pinned app, and any app command.',
+        'In a project without an e2e config file, pass engine and app. For example,',
+        '{engine: "@e2e-dev/web", app: {url: "http://localhost:3000"}}.',
+        'Pass test to run one test first. You can inspect the screen where it passed or failed.',
+        'If it failed, the failure and its line appear before the catalog.',
+        'To use a held test, pass only attach, for example {attach: "p1"}.',
+        'The reply includes a session ID, the catalog, and the first observation.',
+        'Pass the session ID to later calls. Use call {tool: "observe"} to see the current screen.',
+      ].join(' '),
       inputSchema: z.object({
+        attach: z.string().min(1).optional().describe('Pass only attach with an ID from a pause header, such as p1'),
         target: z.string().min(1).optional().describe('Target name from the config; required when the config declares several'),
         config: z.string().min(1).optional().describe("Path to an e2e config file, absolute or relative to the server's working directory; default: the nearest e2e.config.ts, .mts, .js, or .mjs"),
         headed: z
@@ -620,7 +729,7 @@ export class SessionHost {
         session: z.string().min(1).optional().describe('Session id from open_session; may be omitted only while one session is open'),
       }).strict(),
       readOnly: true,
-      call: async (args) => textResult(this.catalog(args.session, args.tool)),
+      call: async (args) => textResult(await this.catalog(args.session, args.tool)),
     });
   }
 
@@ -642,7 +751,8 @@ export class SessionHost {
   private closeSpec(): McpToolSpec {
     return defineMcpTool({
       name: 'close_session',
-      description: 'Close a live session: save a recording still running, end the attempt, dispose the engine, and stop the app processes the session started.',
+      description: 'Close a live session. For a standalone session, save any active recording, end the attempt, ' +
+        'and stop the engine and app processes started for it. For an attached session, detach and leave the test held.',
       inputSchema: z.object({
         session: z.string().min(1).optional().describe('Session id from open_session; may be omitted only while one session is open'),
       }).strict(),

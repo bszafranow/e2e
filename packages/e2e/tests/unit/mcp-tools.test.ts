@@ -33,6 +33,13 @@ describe('catalogLine', () => {
     expect(line.length).toBeLessThan(200);
     expect(line.endsWith('…')).toBe(true);
   });
+
+  it('redacts a secret that spans the catalog sentence cutoff', () => {
+    const secret = 'private.part is not for the catalog';
+    const tool = { ...tap, description: `Uses ${secret}. More details.` };
+    expect(catalogLine('tap', tool, false, (value) => value.replaceAll(secret, '<secret:token>')))
+      .toBe('- tap {target, times?}: Uses <secret:token>.');
+  });
 });
 
 describe('describeToolDetail and toolJsonSchema', () => {

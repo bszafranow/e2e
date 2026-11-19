@@ -96,10 +96,10 @@ export class RunningTree {
    * summary go to the running tests, each test's detail shares what remains
    * once every test has its own row, and tests that still do not fit fold
    * into one `more running` marker. `room` is the screen under the permanent
-   * log; the block pads out to it so the summary sits at the bottom. A test
-   * `paused` at the `--step` prompt says so in place of its clock and shows
-   * the prompt under its steps. The paused test appears first, with enough
-   * rows reserved for its prompt before other tests use the remaining space.
+   * log; the block pads out to it so the summary sits at the bottom. A held
+   * test's row shows the attach ID in place of its clock, with the prompt
+   * under its steps. The held test appears first, with enough rows reserved
+   * for its prompt before other tests use the remaining space.
    */
   render(
     running: readonly RunningTest[],
@@ -148,7 +148,9 @@ export class RunningTree {
         }
         const glyph = index === tests.length - 1 ? F_TREE_END : F_TREE_MIDDLE;
         const held = paused?.test === test ? paused : undefined;
-        const state = held === undefined ? this.clock(now - test.startedMs) : pc.bold(pc.cyan('paused'));
+        const state = held === undefined
+          ? this.clock(now - test.startedMs)
+          : pc.bold(pc.cyan(`(${held.prompt.steps[0].step.attachId})`));
         lines.push(`${pc.bold(pc.yellow(`   ${glyph} `))}${test.title} ${state}`);
         budget -= 1;
         const rows = held === undefined ? perTest : perTest + promptRows;
